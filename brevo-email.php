@@ -69,6 +69,13 @@ function load_dotenv_if_present(array $paths): void
     }
 }
 
+function get_request_header(string $headerName): string
+{
+    $serverKey = 'HTTP_' . strtoupper(str_replace('-', '_', $headerName));
+    $value = $_SERVER[$serverKey] ?? '';
+    return trim((string)$value);
+}
+
 function escape_html(string $value): string
 {
     return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
@@ -396,6 +403,12 @@ load_dotenv_if_present([
 $apiKey = get_env_value('BREVO_API_KEY');
 $senderEmail = get_env_value('BREVO_SENDER_EMAIL', 'tacam@agenciayousay.cl');
 $senderName = get_env_value('BREVO_SENDER_NAME', 'tacam');
+$apiKeyFromHeader = get_request_header('X-Brevo-Api-Key');
+$senderEmailFromHeader = get_request_header('X-Brevo-Sender-Email');
+$senderNameFromHeader = get_request_header('X-Brevo-Sender-Name');
+if ($apiKey === '' && $apiKeyFromHeader !== '') $apiKey = $apiKeyFromHeader;
+if ($senderEmailFromHeader !== '') $senderEmail = $senderEmailFromHeader;
+if ($senderNameFromHeader !== '') $senderName = $senderNameFromHeader;
 $replyToEmail = get_env_value('BREVO_REPLY_TO_EMAIL');
 $replyToName = get_env_value('BREVO_REPLY_TO_NAME', $senderName);
 

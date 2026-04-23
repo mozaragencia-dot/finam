@@ -135,9 +135,31 @@ const APP_CONFIG = {
     || localStorage.getItem('APP_INTERNAL_TOKEN')
     || document.querySelector('meta[name=\"app-internal-token\"]')?.content
     || ''
+  ).trim(),
+  brevoApiKey: String(
+    window.APP_CONFIG?.BREVO_API_KEY
+    || window.__BREVO_API_KEY
+    || localStorage.getItem('BREVO_API_KEY')
+    || document.querySelector('meta[name="brevo-api-key"]')?.content
+    || ''
+  ).trim(),
+  brevoSenderEmail: String(
+    window.APP_CONFIG?.BREVO_SENDER_EMAIL
+    || window.__BREVO_SENDER_EMAIL
+    || localStorage.getItem('BREVO_SENDER_EMAIL')
+    || document.querySelector('meta[name="brevo-sender-email"]')?.content
+    || ''
+  ).trim(),
+  brevoSenderName: String(
+    window.APP_CONFIG?.BREVO_SENDER_NAME
+    || window.__BREVO_SENDER_NAME
+    || localStorage.getItem('BREVO_SENDER_NAME')
+    || document.querySelector('meta[name="brevo-sender-name"]')?.content
+    || ''
   ).trim()
 };
 let toastTimer = null;
+let brevoServerMissingConfig = false;
 let clientsVisibleLimit = CLIENTS_PAGE_SIZE;
 let profilesExpanded = false;
 
@@ -869,11 +891,16 @@ function hasNotificationConsent(booking) {
 async function sendEmailViaBrevo(booking, subject, message, options = {}) {
   const email = String(booking?.email || '').trim();
   if (!email) return false;
+  if (brevoServerMissingConfig && !APP_CONFIG.brevoApiKey) return false;
 
   try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (APP_CONFIG.brevoApiKey) headers['X-Brevo-Api-Key'] = APP_CONFIG.brevoApiKey;
+    if (APP_CONFIG.brevoSenderEmail) headers['X-Brevo-Sender-Email'] = APP_CONFIG.brevoSenderEmail;
+    if (APP_CONFIG.brevoSenderName) headers['X-Brevo-Sender-Name'] = APP_CONFIG.brevoSenderName;
     const response = await fetch('brevo-email.php', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         toEmail: email,
         toName: booking.customer || 'Cliente',
@@ -894,6 +921,9 @@ async function sendEmailViaBrevo(booking, subject, message, options = {}) {
         }
       } else {
         console.warn(`Brevo email error HTTP ${response.status}`);
+      }
+      if (body.toLowerCase().includes('brevo_api_key missing on server')) {
+        brevoServerMissingConfig = true;
       }
       if (body) console.warn('Brevo detalle:', body);
       return false;
