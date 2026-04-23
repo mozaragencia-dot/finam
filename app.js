@@ -1048,28 +1048,46 @@ function buildEmailTemplateData(booking, extra = {}) {
 }
 
 async function notifyBookingChannels(booking, message, emailSubject, emailOptions = {}, channelOptions = {}) {
-  if (!hasNotificationConsent(booking)) return false;
   const onlyLawyer = channelOptions.onlyLawyer === undefined ? isPrisonVisit(booking) : Boolean(channelOptions.onlyLawyer);
+  const notifyLawyer = channelOptions.notifyLawyer === undefined ? true : Boolean(channelOptions.notifyLawyer);
+  const notifyClient = channelOptions.notifyClient === undefined
+    ? hasNotificationConsent(booking)
+    : Boolean(channelOptions.notifyClient);
   const lawyerPhone = getLawyerPhone(booking.assignedTo);
   const lawyerEmail = getLawyerEmail(booking.assignedTo);
   const clientPhone = cleanPhone(booking.phone);
+  const clientEmail = String(booking?.email || '').trim();
 
-  const targets = onlyLawyer ? [lawyerPhone].filter(Boolean) : [clientPhone, lawyerPhone].filter(Boolean);
-  const uniqueTargets = [...new Set(targets)];
+  const whatsappTargets = [];
+  if (notifyLawyer && lawyerPhone) whatsappTargets.push(lawyerPhone);
+  if (!onlyLawyer && notifyClient && clientPhone) whatsappTargets.push(clientPhone);
+  const uniqueTargets = [...new Set(whatsappTargets)];
   const whatsappResults = await Promise.all(uniqueTargets.map(target => sendWhatsAppNotification(target, message)));
-  const sent = whatsappResults.some(item => item.ok);
-  if (!sent && uniqueTargets.length) {
+  const whatsappSent = whatsappResults.some(item => item.ok);
+  if (!whatsappSent && uniqueTargets.length) {
     console.warn('No se pudo enviar WhatsApp por Twilio para la reserva', booking?.id || '');
   }
 
-  const emailTarget = onlyLawyer ? lawyerEmail : String(booking?.email || '').trim();
-  const emailSent = await sendEmailViaBrevo(
-    { ...booking, email: emailTarget, customer: onlyLawyer ? (booking.assignedTo || 'Abogada') : booking.customer },
-    emailSubject,
-    message,
-    emailOptions
-  );
-  return sent || emailSent;
+  const emailRequests = [];
+  if (notifyLawyer && lawyerEmail) {
+    emailRequests.push(sendEmailViaBrevo(
+      { ...booking, email: lawyerEmail, customer: booking.assignedTo || 'Abogada' },
+      emailSubject,
+      message,
+      emailOptions
+    ));
+  }
+  if (!onlyLawyer && notifyClient && clientEmail) {
+    emailRequests.push(sendEmailViaBrevo(
+      { ...booking, email: clientEmail, customer: booking.customer },
+      emailSubject,
+      message,
+      emailOptions
+    ));
+  }
+  const emailResults = await Promise.all(emailRequests);
+  const emailSent = emailResults.some(Boolean);
+  return whatsappSent || emailSent;
 }
 
 async function notifyVisitScheduled(booking) {
@@ -1077,6 +1095,9 @@ async function notifyVisitScheduled(booking) {
   return notifyBookingChannels(booking, message, isPrisonVisit(booking) ? 'TACAM: visita a la cárcel agendada' : 'Calendario de visitas TACAM: cita agendada', {
     templateType: 'appointment_scheduled',
     templateData: buildEmailTemplateData(booking)
+  }, {
+    notifyLawyer: true,
+    notifyClient: hasNotificationConsent(booking)
   });
 }
 
@@ -3580,9 +3601,12 @@ bookingForm.addEventListener('submit', async event => {
   });
   saveBookings(bookings);
   renderAll();
-  notifyVisitScheduled(bookings[0]).catch(error => {
+  let notificationSent = false;
+  try {
+    notificationSent = await notifyVisitScheduled(bookings[0]);
+  } catch (error) {
     console.error('No se pudo enviar notificación al agendar reserva:', error);
-  });
+  }
   bookingForm.reset();
   clientSearchInput.value = '';
   clientSearchResults.replaceChildren();
@@ -3593,7 +3617,13 @@ bookingForm.addEventListener('submit', async event => {
   bookingImputadoStatusInput.value = 'no_imputado';
   updateBookingRepresentativeVisibility();
   playSaveChime();
-  showToast('✅ Cita guardada y agendada correctamente.', { forcePopup: true });
+  if (notificationSent) {
+    showToast('✅ Cita guardada. Evento enviado por correo/WhatsApp. Presiona OK para confirmar.', { forcePopup: true });
+  } else if (hasNotificationConsent(bookings[0])) {
+    showToast('⚠️ Cita guardada, pero falló el envío de correo o WhatsApp.', { forcePopup: true });
+  } else {
+    showToast('✅ Cita guardada. Falta consentimiento para enviar al cliente; se notificó a la abogada.', { forcePopup: true });
+  }
 });
 
 prisonBookingForm.addEventListener('submit', async event => {
@@ -3649,13 +3679,22 @@ prisonBookingForm.addEventListener('submit', async event => {
   });
   saveBookings(bookings);
   renderAll();
-  notifyVisitScheduled(bookings[0]).catch(error => {
+  let notificationSent = false;
+  try {
+    notificationSent = await notifyVisitScheduled(bookings[0]);
+  } catch (error) {
     console.error('No se pudo enviar notificación al agendar visita a la cárcel:', error);
-  });
+  }
   prisonBookingForm.reset();
   setPrisonClientSelection(null);
   playSaveChime();
-  showToast('✅ Visita a la cárcel guardada y agendada correctamente.', { forcePopup: true });
+  if (notificationSent) {
+    showToast('✅ Visita guardada. Evento enviado por correo/WhatsApp. Presiona OK para confirmar.', { forcePopup: true });
+  } else if (hasNotificationConsent(bookings[0])) {
+    showToast('⚠️ Visita guardada, pero falló el envío de correo o WhatsApp.', { forcePopup: true });
+  } else {
+    showToast('✅ Visita guardada. Falta consentimiento para enviar al cliente; se notificó a la abogada.', { forcePopup: true });
+  }
 });
 
 clientRutInput.addEventListener('input', () => {
