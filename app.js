@@ -569,6 +569,7 @@ const ALLOWED_CREDENTIALS = [
 const LAWYER_COLORS = ['#8f203a', '#2166a5', '#2a9d8f', '#e76f51', '#6a4c93', '#e9c46a', '#4f772d'];
 const PRISON_VISIT_MATTER = 'Visita a la Cárcel';
 const UNASSIGNED_LAWYER_LABEL = 'No asignado aún';
+const EMPTY_MODULE_LABEL = 'Vacío';
 const GENDARMERIA_RECIPIENTS = [
   { email: 'Omar.sepulveda@gendarmeria.cl', label: 'Cárcel Hombre' },
   { email: 'tije.cpfantofagasta@gendarmeria.cl', label: 'Cárcel Mujeres' },
@@ -1180,16 +1181,23 @@ function promptRescheduleData(booking, suggestedDate) {
     const lawyerNames = [...new Set(getLawyers().map(item => String(item.name || '').trim()).filter(Boolean))]
       .sort((a, b) => a.localeCompare(b, 'es'));
     const options = [UNASSIGNED_LAWYER_LABEL, ...lawyerNames];
+    const indexedOptions = options.map((name, index) => `${index + 1}) ${name}`).join(', ');
     const input = String(window.prompt(
-      `Abogada asignada (${options.join(', ')})`,
+      `Abogada asignada (${indexedOptions})`,
       assignedToValue || UNASSIGNED_LAWYER_LABEL
     ) || '').trim();
     if (!input) return null;
-    if (!options.includes(input)) {
+    const asNumber = Number.parseInt(input, 10);
+    const selectedByNumber = Number.isInteger(asNumber) && asNumber > 0 && asNumber <= options.length
+      ? options[asNumber - 1]
+      : '';
+    const selectedByName = options.find(option => option.toLowerCase() === input.toLowerCase()) || '';
+    const selectedLawyer = selectedByNumber || selectedByName;
+    if (!selectedLawyer) {
       showToast('Abogada inválida. Debe ser una del listado.');
       return null;
     }
-    assignedToValue = normalizeAssignedToValue(input);
+    assignedToValue = normalizeAssignedToValue(selectedLawyer);
   }
   return { date: dateValue, time: timeValue, assignedTo: assignedToValue };
 }
@@ -2750,7 +2758,8 @@ function renderPrisonTomorrowReadonlyList() {
 }
 
 function getTomorrowPrisonVisitsForGendarmeria(filterValue = '') {
-  return getTomorrowPrisonVisits(filterValue);
+  const visibleIds = new Set(getVisibleBookingsForSession(getBookings()).map(item => item.id));
+  return getTomorrowPrisonVisits(filterValue).filter(item => visibleIds.has(item.id));
 }
 
 function buildGendarmeriaListMessage(visits) {
@@ -2860,16 +2869,25 @@ function buildGendarmeriaTemplateData(visits, senderLawyer = {}) {
       hora: String(booking?.time || '--:--'),
       nombre: String(booking?.customer || '-'),
       rut: String(booking?.rut || '-'),
-      modulo: String(booking?.prisonModule || booking?.representative?.modulo || '').trim() || '-'
+      modulo: String(booking?.prisonModule || booking?.representative?.modulo || '').trim() || EMPTY_MODULE_LABEL
     }))
   };
 }
 
 function buildBookingConfirmationSummary(booking) {
   if (!booking || typeof booking !== 'object') return '';
-  const moduleValue = String(booking.prisonModule || booking.representative?.modulo || '').trim();
-  const moduleLine = moduleValue ? `\nMódulo: ${moduleValue}` : '';
-  return `✅ Datos agendados correctamente.\n\nCliente: ${booking.customer || '-'}\nFecha: ${booking.date || '-'}\nHora: ${booking.time || '--:--'}\nAbogada: ${booking.assignedTo || 'Sin asignar'}${moduleLine}\n\nPresiona OK para confirmar.`;
+  const moduleValue = String(booking.prisonModule || booking.representative?.modulo || '').trim() || EMPTY_MODULE_LABEL;
+  return `✅ Datos agendados correctamente.\n\nCliente: ${booking.customer || '-'}\nFecha: ${booking.date || '-'}\nHora: ${booking.time || '--:--'}\nAbogada: ${booking.assignedTo || 'Sin asignar'}\nMódulo: ${moduleValue}\n\nPresiona OK para confirmar.`;
+}
+
+function showStrongSaveConfirmation(booking) {
+  const summary = buildBookingConfirmationSummary(booking);
+  showSavePopup(summary);
+  try {
+    window.alert(summary);
+  } catch (error) {
+    // fallback silencioso para entornos sin alert
+  }
 }
 
 function escapePreviewHtml(value) {
@@ -2910,7 +2928,7 @@ function buildGendarmeriaPreviewHtml(visits, subject, recipients) {
     : 'Se solicita coordinar visita presencial con los internos que se indican a continuación, en el horario de entrevista señalado.';
 
   const rows = safeVisits.map((booking) => {
-    const modulo = String(booking?.prisonModule || booking?.representative?.modulo || '').trim() || '-';
+    const modulo = String(booking?.prisonModule || booking?.representative?.modulo || '').trim() || EMPTY_MODULE_LABEL;
     return `<tr><td class="name">${escapePreviewHtml(booking.customer || '-')}</td><td class="rut">${escapePreviewHtml(booking.rut || '-')}</td><td>${escapePreviewHtml(modulo)}</td><td class="fill"></td><td class="fill"></td></tr>`;
   }).join('');
 
@@ -2981,7 +2999,7 @@ function openGendarmeriaPreview(visits, subject, recipients) {
 }
 
 async function sendGendarmeriaRoster(visits, subject, options = {}) {
-  const { silentMissingRecipients = false, overrideRecipients = null } = options;
+  const { silentMissingRecipients = false, overrideRecipients = null, includeDefaultCopies = true } = options;
   const { recipients, hasInvalidTestEmail } = getGendarmeriaRecipients();
   if (hasInvalidTestEmail) {
     if (!silentMissingRecipients) showToast('Correo de prueba inválido. Revisa el formato.');
@@ -3001,7 +3019,8 @@ async function sendGendarmeriaRoster(visits, subject, options = {}) {
     })
     .filter(Boolean))];
   const baseRecipients = Array.isArray(overrideRecipients) && overrideRecipients.length ? overrideRecipients : recipients;
-  const allRecipients = [...new Set([...baseRecipients, ...GENDARMERIA_CC_RECIPIENTS, ...lawyerEmails])];
+  const copyRecipients = includeDefaultCopies ? [...GENDARMERIA_CC_RECIPIENTS, ...lawyerEmails] : [];
+  const allRecipients = [...new Set([...baseRecipients, ...copyRecipients])];
   try {
     for (const toEmail of allRecipients) {
       const response = await fetch('brevo-email.php', {
@@ -3036,7 +3055,7 @@ function renderGendarmeriaVisitOptions() {
   visits.forEach(booking => {
     const option = document.createElement('option');
     option.value = booking.id;
-    const modulo = booking.prisonModule || booking.representative?.modulo || '-';
+    const modulo = booking.prisonModule || booking.representative?.modulo || EMPTY_MODULE_LABEL;
     option.textContent = `${booking.date || '-'} ${booking.time || '--:--'} · ${booking.customer || 'Sin nombre'} · módulo ${modulo}`;
     if (previousValues.has(booking.id)) option.selected = true;
     gendarmeriaVisitSelect.appendChild(option);
@@ -3669,7 +3688,7 @@ bookingForm.addEventListener('submit', async event => {
   bookingImputadoStatusInput.value = 'no_imputado';
   updateBookingRepresentativeVisibility();
   playSaveChime();
-  showSavePopup(buildBookingConfirmationSummary(bookings[0]));
+  showStrongSaveConfirmation(bookings[0]);
   if (notificationSent) {
     showToast('✅ Cita guardada. Evento enviado por correo/WhatsApp. Presiona OK para confirmar.', { forcePopup: true });
   } else if (hasNotificationConsent(bookings[0])) {
@@ -3741,7 +3760,7 @@ prisonBookingForm.addEventListener('submit', async event => {
   prisonBookingForm.reset();
   setPrisonClientSelection(null);
   playSaveChime();
-  showSavePopup(buildBookingConfirmationSummary(bookings[0]));
+  showStrongSaveConfirmation(bookings[0]);
   if (notificationSent) {
     showToast('✅ Visita guardada. Evento enviado por correo/WhatsApp. Presiona OK para confirmar.', { forcePopup: true });
   } else if (hasNotificationConsent(bookings[0])) {
@@ -3919,7 +3938,7 @@ if (sendGendarmeriaTestEmailBtn) sendGendarmeriaTestEmailBtn.addEventListener('c
   openGendarmeriaPreview(visits, subject, [testEmail]);
 
   try {
-    const sent = await sendGendarmeriaRoster(visits, subject, { overrideRecipients: [testEmail] });
+    const sent = await sendGendarmeriaRoster(visits, subject, { overrideRecipients: [testEmail], includeDefaultCopies: false });
     if (!sent) throw new Error('No se pudo enviar prueba');
     showToast(`Correo de prueba enviado a ${testEmail}.`);
   } catch (error) {
