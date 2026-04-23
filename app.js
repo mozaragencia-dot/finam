@@ -2783,21 +2783,41 @@ function resolveLawyerFullName(nameOrUsernameOrEmail) {
   return input;
 }
 
-function getSenderLawyerIdentity() {
+function getSenderLawyerIdentity(visits = []) {
+  const session = getSession() || {};
   const sessionName = String(getCurrentSessionLawyerName() || '').trim();
-  const sessionUsername = String(getSession()?.username || '').trim().toLowerCase();
-  const profile = getProfiles().find(item => String(item.username || '').trim().toLowerCase() === sessionUsername) || null;
+  const sessionUsername = String(session.username || '').trim().toLowerCase();
+  const profiles = getProfiles();
+  const lawyers = getLawyers();
+  const profile = profiles.find(item =>
+    String(item.username || '').trim().toLowerCase() === sessionUsername
+    || String(item.email || '').trim().toLowerCase() === sessionUsername
+  ) || null;
+  const profileEmail = String(profile?.email || '').trim().toLowerCase();
 
-  // Resolver nombre canónico priorizando el registro de abogadas
-  const resolvedName = resolveLawyerFullName(sessionName || sessionUsername || profile?.email || '');
+  let lawyer = lawyers.find(item => String(item.email || '').trim().toLowerCase() === profileEmail)
+    || lawyers.find(item => String(item.email || '').trim().toLowerCase().split('@')[0] === sessionUsername)
+    || lawyers.find(item => (item.name || '').trim() === sessionName)
+    || lawyers.find(item => (item.name || '').trim() === resolveLawyerFullName(sessionName || profile?.name || sessionUsername));
 
-  const lawyer = getLawyers().find(item => (item.name || '').trim() === resolvedName)
-    || getLawyers().find(item => (item.name || '').trim() === sessionName)
-    || getLawyers().find(item => String(item.email || '').trim().toLowerCase() === String(profile?.email || '').trim().toLowerCase());
-  return {
-    name: resolvedName || sessionName || String(profile?.name || '').trim(),
-    rut: String(lawyer?.rut || profile?.rut || '').trim()
-  };
+  if (!lawyer && Array.isArray(visits)) {
+    const assigned = visits
+      .map(item => String(item?.assignedTo || '').trim())
+      .filter(Boolean);
+    if (assigned.length) {
+      lawyer = lawyers.find(item => (item.name || '').trim() === assigned[0]) || null;
+    }
+  }
+
+  const canonicalName = String(
+    lawyer?.name
+    || profile?.name
+    || resolveLawyerFullName(sessionName || sessionUsername || profileEmail)
+    || sessionName
+    || sessionUsername
+  ).trim();
+  const rut = String(lawyer?.rut || profile?.rut || '').trim();
+  return { name: canonicalName, rut };
 }
 
 function buildGendarmeriaTemplateData(visits, senderLawyer = {}) {
@@ -2805,13 +2825,12 @@ function buildGendarmeriaTemplateData(visits, senderLawyer = {}) {
   const folioBase = Date.now().toString().slice(-8);
   const senderName = String(senderLawyer?.name || '').trim();
   const senderRut = String(senderLawyer?.rut || '').trim();
-  const session = getSession();
   return {
     fechaHoy: String(safeVisits[0]?.date || getTomorrowDateString()),
     totalVisitas: String(Array.isArray(visits) ? visits.length : 0),
     folioDocumento: `TAC-${folioBase}`,
-    abogadaNombre: resolveLawyerFullName(senderName || session?.username || session?.profileName),
-    abogadaRut: senderRut,
+    abogadaNombre: senderName || 'Abogada TACAM',
+    abogadaRut: senderRut || '-',
     visits: safeVisits.map((booking, index) => ({
       numero: index + 1,
       hora: String(booking?.time || '--:--'),
@@ -2850,7 +2869,7 @@ function getGendarmeriaRecipients() {
 function buildGendarmeriaPreviewHtml(visits, subject, recipients) {
   const safeVisits = Array.isArray(visits) ? visits : [];
   const safeRecipients = Array.isArray(recipients) ? recipients : [];
-  const senderLawyer = getSenderLawyerIdentity();
+  const senderLawyer = getSenderLawyerIdentity(visits);
   const firstVisit = safeVisits[0] || {};
   const fechaVisita = escapePreviewHtml(firstVisit.date || getTomorrowDateString());
   const horaVisita = escapePreviewHtml(firstVisit.time || '--:--');
@@ -2941,7 +2960,7 @@ async function sendGendarmeriaRoster(visits, subject, options = {}) {
     return false;
   }
   const textContent = buildGendarmeriaListMessage(visits);
-  const senderLawyer = getSenderLawyerIdentity();
+  const senderLawyer = getSenderLawyerIdentity(visits);
   const lawyerEmails = [...new Set(visits
     .map(booking => {
       const lawyer = getLawyers().find(item => (item.name || '').trim() === (booking.assignedTo || '').trim());
