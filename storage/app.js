@@ -135,9 +135,31 @@ const APP_CONFIG = {
     || localStorage.getItem('APP_INTERNAL_TOKEN')
     || document.querySelector('meta[name=\"app-internal-token\"]')?.content
     || ''
+  ).trim(),
+  brevoApiKey: String(
+    window.APP_CONFIG?.BREVO_API_KEY
+    || window.__BREVO_API_KEY
+    || localStorage.getItem('BREVO_API_KEY')
+    || document.querySelector('meta[name="brevo-api-key"]')?.content
+    || ''
+  ).trim(),
+  brevoSenderEmail: String(
+    window.APP_CONFIG?.BREVO_SENDER_EMAIL
+    || window.__BREVO_SENDER_EMAIL
+    || localStorage.getItem('BREVO_SENDER_EMAIL')
+    || document.querySelector('meta[name="brevo-sender-email"]')?.content
+    || ''
+  ).trim(),
+  brevoSenderName: String(
+    window.APP_CONFIG?.BREVO_SENDER_NAME
+    || window.__BREVO_SENDER_NAME
+    || localStorage.getItem('BREVO_SENDER_NAME')
+    || document.querySelector('meta[name="brevo-sender-name"]')?.content
+    || ''
   ).trim()
 };
 let toastTimer = null;
+let brevoServerMissingConfig = false;
 let clientsVisibleLimit = CLIENTS_PAGE_SIZE;
 let profilesExpanded = false;
 
@@ -569,6 +591,7 @@ const ALLOWED_CREDENTIALS = [
 const LAWYER_COLORS = ['#8f203a', '#2166a5', '#2a9d8f', '#e76f51', '#6a4c93', '#e9c46a', '#4f772d'];
 const PRISON_VISIT_MATTER = 'Visita a la Cárcel';
 const UNASSIGNED_LAWYER_LABEL = 'No asignado aún';
+const EMPTY_MODULE_LABEL = 'Vacío';
 const GENDARMERIA_RECIPIENTS = [
   { email: 'Omar.sepulveda@gendarmeria.cl', label: 'Cárcel Hombre' },
   { email: 'tije.cpfantofagasta@gendarmeria.cl', label: 'Cárcel Mujeres' },
@@ -657,6 +680,20 @@ function normalizeAssignedToValue(value) {
   return clean === UNASSIGNED_LAWYER_LABEL ? '' : clean;
 }
 
+function normalizeLawyerComparisonValue(value) {
+  return String(value || '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function isSameLawyerName(left, right) {
+  const leftResolved = resolveLawyerFullName(left);
+  const rightResolved = resolveLawyerFullName(right);
+  return normalizeLawyerComparisonValue(leftResolved || left) === normalizeLawyerComparisonValue(rightResolved || right);
+}
+
 function getProfileByCredentials(username, password) {
   const cleanUser = String(username || '').trim().toLowerCase();
   return getProfiles().find(profile =>
@@ -704,11 +741,12 @@ function applyRoleAccess() {
   if (lawyerCalendarFilter) lawyerCalendarFilter.disabled = role === 'Abogada';
   if (sharedOnlyInput) sharedOnlyInput.disabled = role === 'Abogada';
   if (role === 'Abogada' && sessionLawyer) {
-    if (assignedToSelect) { assignedToSelect.value = sessionLawyer; assignedToSelect.disabled = false; }
-    if (prisonAssignedToSelect) { prisonAssignedToSelect.value = sessionLawyer; prisonAssignedToSelect.disabled = false; }
-    if (lawyerFilter) lawyerFilter.value = sessionLawyer;
-    if (lawyerCalendarFilter) lawyerCalendarFilter.value = sessionLawyer;
-    if (reportLawyerFilter) reportLawyerFilter.value = sessionLawyer;
+    const resolvedSessionLawyer = resolveLawyerFullName(sessionLawyer) || sessionLawyer;
+    if (assignedToSelect) { assignedToSelect.value = resolvedSessionLawyer; assignedToSelect.disabled = false; }
+    if (prisonAssignedToSelect) { prisonAssignedToSelect.value = resolvedSessionLawyer; prisonAssignedToSelect.disabled = false; }
+    if (lawyerFilter) lawyerFilter.value = resolvedSessionLawyer;
+    if (lawyerCalendarFilter) lawyerCalendarFilter.value = resolvedSessionLawyer;
+    if (reportLawyerFilter) reportLawyerFilter.value = resolvedSessionLawyer;
   }
 }
 
@@ -718,13 +756,13 @@ function getVisibleClientsForSession() {
   const clients = getClients();
   if (role !== 'Abogada' || !sessionLawyer) return clients;
   const clientIds = new Set(getBookings()
-    .filter(booking => (booking.assignedTo || '').trim() === sessionLawyer)
+    .filter(booking => isSameLawyerName(booking.assignedTo, sessionLawyer))
     .map(booking => booking.clientId)
     .filter(Boolean));
   return clients.filter(client =>
     clientIds.has(client.id) ||
-    String(client.assignedTo || '').trim() === sessionLawyer ||
-    String(client.createdByLawyer || '').trim() === sessionLawyer
+    isSameLawyerName(client.assignedTo, sessionLawyer) ||
+    isSameLawyerName(client.createdByLawyer, sessionLawyer)
   );
 }
 
@@ -733,7 +771,7 @@ function getVisibleBookingsForSession(bookings = getBookings()) {
   const role = getCurrentSessionRole();
   const sessionLawyer = getCurrentSessionLawyerName();
   if (role !== 'Abogada' || !sessionLawyer) return bookings;
-  return bookings.filter(booking => String(booking.assignedTo || '').trim() === sessionLawyer);
+  return bookings.filter(booking => isSameLawyerName(booking.assignedTo, sessionLawyer));
 }
 
 function ensureDefaultLawyerAccessProfiles() {
@@ -853,11 +891,16 @@ function hasNotificationConsent(booking) {
 async function sendEmailViaBrevo(booking, subject, message, options = {}) {
   const email = String(booking?.email || '').trim();
   if (!email) return false;
+  if (brevoServerMissingConfig && !APP_CONFIG.brevoApiKey) return false;
 
   try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (APP_CONFIG.brevoApiKey) headers['X-Brevo-Api-Key'] = APP_CONFIG.brevoApiKey;
+    if (APP_CONFIG.brevoSenderEmail) headers['X-Brevo-Sender-Email'] = APP_CONFIG.brevoSenderEmail;
+    if (APP_CONFIG.brevoSenderName) headers['X-Brevo-Sender-Name'] = APP_CONFIG.brevoSenderName;
     const response = await fetch('brevo-email.php', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         toEmail: email,
         toName: booking.customer || 'Cliente',
@@ -878,6 +921,9 @@ async function sendEmailViaBrevo(booking, subject, message, options = {}) {
         }
       } else {
         console.warn(`Brevo email error HTTP ${response.status}`);
+      }
+      if (body.toLowerCase().includes('brevo_api_key missing on server')) {
+        brevoServerMissingConfig = true;
       }
       if (body) console.warn('Brevo detalle:', body);
       return false;
@@ -1048,28 +1094,46 @@ function buildEmailTemplateData(booking, extra = {}) {
 }
 
 async function notifyBookingChannels(booking, message, emailSubject, emailOptions = {}, channelOptions = {}) {
-  if (!hasNotificationConsent(booking)) return false;
   const onlyLawyer = channelOptions.onlyLawyer === undefined ? isPrisonVisit(booking) : Boolean(channelOptions.onlyLawyer);
+  const notifyLawyer = channelOptions.notifyLawyer === undefined ? true : Boolean(channelOptions.notifyLawyer);
+  const notifyClient = channelOptions.notifyClient === undefined
+    ? hasNotificationConsent(booking)
+    : Boolean(channelOptions.notifyClient);
   const lawyerPhone = getLawyerPhone(booking.assignedTo);
   const lawyerEmail = getLawyerEmail(booking.assignedTo);
   const clientPhone = cleanPhone(booking.phone);
+  const clientEmail = String(booking?.email || '').trim();
 
-  const targets = onlyLawyer ? [lawyerPhone].filter(Boolean) : [clientPhone, lawyerPhone].filter(Boolean);
-  const uniqueTargets = [...new Set(targets)];
+  const whatsappTargets = [];
+  if (notifyLawyer && lawyerPhone) whatsappTargets.push(lawyerPhone);
+  if (!onlyLawyer && notifyClient && clientPhone) whatsappTargets.push(clientPhone);
+  const uniqueTargets = [...new Set(whatsappTargets)];
   const whatsappResults = await Promise.all(uniqueTargets.map(target => sendWhatsAppNotification(target, message)));
-  const sent = whatsappResults.some(item => item.ok);
-  if (!sent && uniqueTargets.length) {
+  const whatsappSent = whatsappResults.some(item => item.ok);
+  if (!whatsappSent && uniqueTargets.length) {
     console.warn('No se pudo enviar WhatsApp por Twilio para la reserva', booking?.id || '');
   }
 
-  const emailTarget = onlyLawyer ? lawyerEmail : String(booking?.email || '').trim();
-  const emailSent = await sendEmailViaBrevo(
-    { ...booking, email: emailTarget, customer: onlyLawyer ? (booking.assignedTo || 'Abogada') : booking.customer },
-    emailSubject,
-    message,
-    emailOptions
-  );
-  return sent || emailSent;
+  const emailRequests = [];
+  if (notifyLawyer && lawyerEmail) {
+    emailRequests.push(sendEmailViaBrevo(
+      { ...booking, email: lawyerEmail, customer: booking.assignedTo || 'Abogada' },
+      emailSubject,
+      message,
+      emailOptions
+    ));
+  }
+  if (!onlyLawyer && notifyClient && clientEmail) {
+    emailRequests.push(sendEmailViaBrevo(
+      { ...booking, email: clientEmail, customer: booking.customer },
+      emailSubject,
+      message,
+      emailOptions
+    ));
+  }
+  const emailResults = await Promise.all(emailRequests);
+  const emailSent = emailResults.some(Boolean);
+  return whatsappSent || emailSent;
 }
 
 async function notifyVisitScheduled(booking) {
@@ -1077,6 +1141,9 @@ async function notifyVisitScheduled(booking) {
   return notifyBookingChannels(booking, message, isPrisonVisit(booking) ? 'TACAM: visita a la cárcel agendada' : 'Calendario de visitas TACAM: cita agendada', {
     templateType: 'appointment_scheduled',
     templateData: buildEmailTemplateData(booking)
+  }, {
+    notifyLawyer: true,
+    notifyClient: hasNotificationConsent(booking)
   });
 }
 
@@ -1154,7 +1221,30 @@ function promptRescheduleData(booking, suggestedDate) {
     showToast('Hora inválida. Usa formato HH:MM.');
     return null;
   }
-  return { date: dateValue, time: timeValue };
+  let assignedToValue = String(booking.assignedTo || '').trim();
+  if (isPrisonVisit(booking)) {
+    const lawyerNames = [...new Set(getLawyers().map(item => String(item.name || '').trim()).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, 'es'));
+    const options = [UNASSIGNED_LAWYER_LABEL, ...lawyerNames];
+    const indexedOptions = options.map((name, index) => `${index + 1}) ${name}`).join(', ');
+    const input = String(window.prompt(
+      `Abogada asignada (${indexedOptions})`,
+      assignedToValue || UNASSIGNED_LAWYER_LABEL
+    ) || '').trim();
+    if (!input) return null;
+    const asNumber = Number.parseInt(input, 10);
+    const selectedByNumber = Number.isInteger(asNumber) && asNumber > 0 && asNumber <= options.length
+      ? options[asNumber - 1]
+      : '';
+    const selectedByName = options.find(option => option.toLowerCase() === input.toLowerCase()) || '';
+    const selectedLawyer = selectedByNumber || selectedByName;
+    if (!selectedLawyer) {
+      showToast('Abogada inválida. Debe ser una del listado.');
+      return null;
+    }
+    assignedToValue = normalizeAssignedToValue(selectedLawyer);
+  }
+  return { date: dateValue, time: timeValue, assignedTo: assignedToValue };
 }
 
 function moveBookingDate(bookingId, suggestedDate) {
@@ -1167,14 +1257,22 @@ function moveBookingDate(bookingId, suggestedDate) {
 
   const oldDate = booking.date;
   const oldTime = booking.time;
+  const oldAssignedTo = booking.assignedTo;
   booking.date = nextData.date;
   booking.time = nextData.time;
+  if (isPrisonVisit(booking)) {
+    booking.assignedTo = String(nextData.assignedTo || '').trim();
+  }
   booking.reminder24hSentAt = '';
   booking.reminder1hSentAt = '';
   booking.updatedAt = new Date().toISOString();
   saveBookings(bookings);
   renderAll();
   void notifyReschedule(booking, { date: oldDate, time: oldTime }, { date: nextData.date, time: nextData.time });
+  if (oldAssignedTo !== booking.assignedTo && isPrisonVisit(booking)) {
+    showToast('Visita reprogramada y abogada actualizada.');
+    return;
+  }
   showToast('Cita reprogramada correctamente.');
 }
 
@@ -2705,7 +2803,8 @@ function renderPrisonTomorrowReadonlyList() {
 }
 
 function getTomorrowPrisonVisitsForGendarmeria(filterValue = '') {
-  return getTomorrowPrisonVisits(filterValue);
+  const visibleIds = new Set(getVisibleBookingsForSession(getBookings()).map(item => item.id));
+  return getTomorrowPrisonVisits(filterValue).filter(item => visibleIds.has(item.id));
 }
 
 function buildGendarmeriaListMessage(visits) {
@@ -2762,21 +2861,41 @@ function resolveLawyerFullName(nameOrUsernameOrEmail) {
   return input;
 }
 
-function getSenderLawyerIdentity() {
+function getSenderLawyerIdentity(visits = []) {
+  const session = getSession() || {};
   const sessionName = String(getCurrentSessionLawyerName() || '').trim();
-  const sessionUsername = String(getSession()?.username || '').trim().toLowerCase();
-  const profile = getProfiles().find(item => String(item.username || '').trim().toLowerCase() === sessionUsername) || null;
+  const sessionUsername = String(session.username || '').trim().toLowerCase();
+  const profiles = getProfiles();
+  const lawyers = getLawyers();
+  const profile = profiles.find(item =>
+    String(item.username || '').trim().toLowerCase() === sessionUsername
+    || String(item.email || '').trim().toLowerCase() === sessionUsername
+  ) || null;
+  const profileEmail = String(profile?.email || '').trim().toLowerCase();
 
-  // Resolver nombre canónico priorizando el registro de abogadas
-  const resolvedName = resolveLawyerFullName(sessionName || sessionUsername || profile?.email || '');
+  let lawyer = lawyers.find(item => String(item.email || '').trim().toLowerCase() === profileEmail)
+    || lawyers.find(item => String(item.email || '').trim().toLowerCase().split('@')[0] === sessionUsername)
+    || lawyers.find(item => (item.name || '').trim() === sessionName)
+    || lawyers.find(item => (item.name || '').trim() === resolveLawyerFullName(sessionName || profile?.name || sessionUsername));
 
-  const lawyer = getLawyers().find(item => (item.name || '').trim() === resolvedName)
-    || getLawyers().find(item => (item.name || '').trim() === sessionName)
-    || getLawyers().find(item => String(item.email || '').trim().toLowerCase() === String(profile?.email || '').trim().toLowerCase());
-  return {
-    name: resolvedName || sessionName || String(profile?.name || '').trim(),
-    rut: String(lawyer?.rut || profile?.rut || '').trim()
-  };
+  if (!lawyer && Array.isArray(visits)) {
+    const assigned = visits
+      .map(item => String(item?.assignedTo || '').trim())
+      .filter(Boolean);
+    if (assigned.length) {
+      lawyer = lawyers.find(item => (item.name || '').trim() === assigned[0]) || null;
+    }
+  }
+
+  const canonicalName = String(
+    lawyer?.name
+    || profile?.name
+    || resolveLawyerFullName(sessionName || sessionUsername || profileEmail)
+    || sessionName
+    || sessionUsername
+  ).trim();
+  const rut = String(lawyer?.rut || profile?.rut || '').trim();
+  return { name: canonicalName, rut };
 }
 
 function buildGendarmeriaTemplateData(visits, senderLawyer = {}) {
@@ -2784,20 +2903,31 @@ function buildGendarmeriaTemplateData(visits, senderLawyer = {}) {
   const folioBase = Date.now().toString().slice(-8);
   const senderName = String(senderLawyer?.name || '').trim();
   const senderRut = String(senderLawyer?.rut || '').trim();
-  const session = getSession();
   return {
     fechaHoy: String(safeVisits[0]?.date || getTomorrowDateString()),
     totalVisitas: String(Array.isArray(visits) ? visits.length : 0),
     folioDocumento: `TAC-${folioBase}`,
-    abogadaNombre: resolveLawyerFullName(senderName || session?.username || session?.profileName),
-    abogadaRut: senderRut,
+    abogadaNombre: senderName || 'Abogada TACAM',
+    abogadaRut: senderRut || '-',
     visits: safeVisits.map((booking, index) => ({
       numero: index + 1,
       hora: String(booking?.time || '--:--'),
       nombre: String(booking?.customer || '-'),
-      rut: String(booking?.rut || '-')
+      rut: String(booking?.rut || '-'),
+      modulo: String(booking?.prisonModule || booking?.representative?.modulo || '').trim() || EMPTY_MODULE_LABEL
     }))
   };
+}
+
+function buildBookingConfirmationSummary(booking) {
+  if (!booking || typeof booking !== 'object') return '';
+  const moduleValue = String(booking.prisonModule || booking.representative?.modulo || '').trim() || EMPTY_MODULE_LABEL;
+  return `✅ Datos agendados correctamente.\n\nCliente: ${booking.customer || '-'}\nFecha: ${booking.date || '-'}\nHora: ${booking.time || '--:--'}\nAbogada: ${booking.assignedTo || 'Sin asignar'}\nMódulo: ${moduleValue}\n\nPresiona OK.`;
+}
+
+function showStrongSaveConfirmation(booking) {
+  const summary = buildBookingConfirmationSummary(booking);
+  showSavePopup(summary);
 }
 
 function escapePreviewHtml(value) {
@@ -2829,7 +2959,7 @@ function getGendarmeriaRecipients() {
 function buildGendarmeriaPreviewHtml(visits, subject, recipients) {
   const safeVisits = Array.isArray(visits) ? visits : [];
   const safeRecipients = Array.isArray(recipients) ? recipients : [];
-  const senderLawyer = getSenderLawyerIdentity();
+  const senderLawyer = getSenderLawyerIdentity(visits);
   const firstVisit = safeVisits[0] || {};
   const fechaVisita = escapePreviewHtml(firstVisit.date || getTomorrowDateString());
   const horaVisita = escapePreviewHtml(firstVisit.time || '--:--');
@@ -2838,7 +2968,8 @@ function buildGendarmeriaPreviewHtml(visits, subject, recipients) {
     : 'Se solicita coordinar visita presencial con los internos que se indican a continuación, en el horario de entrevista señalado.';
 
   const rows = safeVisits.map((booking) => {
-    return `<tr><td class="name">${escapePreviewHtml(booking.customer || '-')}</td><td class="rut">${escapePreviewHtml(booking.rut || '-')}</td><td class="fill"></td><td class="fill"></td><td class="fill"></td></tr>`;
+    const modulo = String(booking?.prisonModule || booking?.representative?.modulo || '').trim() || EMPTY_MODULE_LABEL;
+    return `<tr><td class="name">${escapePreviewHtml(booking.customer || '-')}</td><td class="rut">${escapePreviewHtml(booking.rut || '-')}</td><td>${escapePreviewHtml(modulo)}</td><td class="fill"></td><td class="fill"></td></tr>`;
   }).join('');
 
   return `<!doctype html><html lang="es"><head><meta charset="utf-8" /><title>Previsualización correo Gendarmería</title><style>
@@ -2908,7 +3039,7 @@ function openGendarmeriaPreview(visits, subject, recipients) {
 }
 
 async function sendGendarmeriaRoster(visits, subject, options = {}) {
-  const { silentMissingRecipients = false, overrideRecipients = null } = options;
+  const { silentMissingRecipients = false, overrideRecipients = null, includeDefaultCopies = true } = options;
   const { recipients, hasInvalidTestEmail } = getGendarmeriaRecipients();
   if (hasInvalidTestEmail) {
     if (!silentMissingRecipients) showToast('Correo de prueba inválido. Revisa el formato.');
@@ -2920,7 +3051,7 @@ async function sendGendarmeriaRoster(visits, subject, options = {}) {
     return false;
   }
   const textContent = buildGendarmeriaListMessage(visits);
-  const senderLawyer = getSenderLawyerIdentity();
+  const senderLawyer = getSenderLawyerIdentity(visits);
   const lawyerEmails = [...new Set(visits
     .map(booking => {
       const lawyer = getLawyers().find(item => (item.name || '').trim() === (booking.assignedTo || '').trim());
@@ -2928,7 +3059,8 @@ async function sendGendarmeriaRoster(visits, subject, options = {}) {
     })
     .filter(Boolean))];
   const baseRecipients = Array.isArray(overrideRecipients) && overrideRecipients.length ? overrideRecipients : recipients;
-  const allRecipients = [...new Set([...baseRecipients, ...GENDARMERIA_CC_RECIPIENTS, ...lawyerEmails])];
+  const copyRecipients = includeDefaultCopies ? [...GENDARMERIA_CC_RECIPIENTS, ...lawyerEmails] : [];
+  const allRecipients = [...new Set([...baseRecipients, ...copyRecipients])];
   try {
     for (const toEmail of allRecipients) {
       const response = await fetch('brevo-email.php', {
@@ -2963,7 +3095,7 @@ function renderGendarmeriaVisitOptions() {
   visits.forEach(booking => {
     const option = document.createElement('option');
     option.value = booking.id;
-    const modulo = booking.prisonModule || booking.representative?.modulo || '-';
+    const modulo = booking.prisonModule || booking.representative?.modulo || EMPTY_MODULE_LABEL;
     option.textContent = `${booking.date || '-'} ${booking.time || '--:--'} · ${booking.customer || 'Sin nombre'} · módulo ${modulo}`;
     if (previousValues.has(booking.id)) option.selected = true;
     gendarmeriaVisitSelect.appendChild(option);
@@ -3580,9 +3712,12 @@ bookingForm.addEventListener('submit', async event => {
   });
   saveBookings(bookings);
   renderAll();
-  notifyVisitScheduled(bookings[0]).catch(error => {
+  let notificationSent = false;
+  try {
+    notificationSent = await notifyVisitScheduled(bookings[0]);
+  } catch (error) {
     console.error('No se pudo enviar notificación al agendar reserva:', error);
-  });
+  }
   bookingForm.reset();
   clientSearchInput.value = '';
   clientSearchResults.replaceChildren();
@@ -3593,7 +3728,14 @@ bookingForm.addEventListener('submit', async event => {
   bookingImputadoStatusInput.value = 'no_imputado';
   updateBookingRepresentativeVisibility();
   playSaveChime();
-  showToast('✅ Cita guardada y agendada correctamente.', { forcePopup: true });
+  showStrongSaveConfirmation(bookings[0]);
+  if (notificationSent) {
+    showToast('✅ Cita guardada. Evento enviado por correo/WhatsApp. Presiona OK para confirmar.', { forcePopup: true });
+  } else if (hasNotificationConsent(bookings[0])) {
+    showToast('⚠️ Cita guardada, pero falló el envío de correo o WhatsApp.', { forcePopup: true });
+  } else {
+    showToast('✅ Cita guardada. Falta consentimiento para enviar al cliente; se notificó a la abogada.', { forcePopup: true });
+  }
 });
 
 prisonBookingForm.addEventListener('submit', async event => {
@@ -3649,13 +3791,23 @@ prisonBookingForm.addEventListener('submit', async event => {
   });
   saveBookings(bookings);
   renderAll();
-  notifyVisitScheduled(bookings[0]).catch(error => {
+  let notificationSent = false;
+  try {
+    notificationSent = await notifyVisitScheduled(bookings[0]);
+  } catch (error) {
     console.error('No se pudo enviar notificación al agendar visita a la cárcel:', error);
-  });
+  }
   prisonBookingForm.reset();
   setPrisonClientSelection(null);
   playSaveChime();
-  showToast('✅ Visita a la cárcel guardada y agendada correctamente.', { forcePopup: true });
+  showStrongSaveConfirmation(bookings[0]);
+  if (notificationSent) {
+    showToast('✅ Visita guardada. Evento enviado por correo/WhatsApp. Presiona OK para confirmar.', { forcePopup: true });
+  } else if (hasNotificationConsent(bookings[0])) {
+    showToast('⚠️ Visita guardada, pero falló el envío de correo o WhatsApp.', { forcePopup: true });
+  } else {
+    showToast('✅ Visita guardada. Falta consentimiento para enviar al cliente; se notificó a la abogada.', { forcePopup: true });
+  }
 });
 
 clientRutInput.addEventListener('input', () => {
@@ -3826,7 +3978,7 @@ if (sendGendarmeriaTestEmailBtn) sendGendarmeriaTestEmailBtn.addEventListener('c
   openGendarmeriaPreview(visits, subject, [testEmail]);
 
   try {
-    const sent = await sendGendarmeriaRoster(visits, subject, { overrideRecipients: [testEmail] });
+    const sent = await sendGendarmeriaRoster(visits, subject, { overrideRecipients: [testEmail], includeDefaultCopies: false });
     if (!sent) throw new Error('No se pudo enviar prueba');
     showToast(`Correo de prueba enviado a ${testEmail}.`);
   } catch (error) {
@@ -3857,8 +4009,6 @@ if (sendGendarmeriaEmailBtn) sendGendarmeriaEmailBtn.addEventListener('click', a
   }
   const subject = `TACAM: Nómina visita a la cárcel ${visits[0]?.date || ''}`.trim();
   openGendarmeriaPreview(visits, subject, recipients);
-
-  if (!window.confirm(`¿Confirmar envío manual a Gendarmería para ${visits.length} visita(s) de mañana?`)) return;
 
   try {
     const sent = await sendGendarmeriaRoster(visits, subject);
