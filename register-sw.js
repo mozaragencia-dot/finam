@@ -1,27 +1,29 @@
-// Force unregister old service workers and clear all caches on first load
-// Then register the new network-first service worker
+// Run a one-time cleanup for legacy SW/caches, then register current worker.
+// Avoid reload loops by reloading at most once per page session.
 (async function() {
   if (!('serviceWorker' in navigator)) return;
 
   try {
-    // Unregister ALL existing service workers to clear stale cache-first behavior
-    const registrations = await navigator.serviceWorker.getRegistrations();
-    for (const reg of registrations) {
-      await reg.unregister();
+    const CLEANUP_KEY = 'tacam_sw_cleanup_v12_done';
+    const hasCleaned = localStorage.getItem(CLEANUP_KEY) === '1';
+    if (!hasCleaned) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      for (const reg of registrations) {
+        await reg.unregister();
+      }
+
+      const cacheNames = await caches.keys();
+      await Promise.all(cacheNames.map(name => caches.delete(name)));
+      localStorage.setItem(CLEANUP_KEY, '1');
     }
 
-    // Clear all caches to remove stale assets
-    const cacheNames = await caches.keys();
-    await Promise.all(cacheNames.map(name => caches.delete(name)));
-
-    // Register the new network-first service worker
     const registration = await navigator.serviceWorker.register('./sw.js?v=12');
     registration.update();
 
-    let refreshing = false;
+    const RELOAD_KEY = 'tacam_sw_reloaded_once';
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (refreshing) return;
-      refreshing = true;
+      if (sessionStorage.getItem(RELOAD_KEY) === '1') return;
+      sessionStorage.setItem(RELOAD_KEY, '1');
       window.location.reload();
     });
 

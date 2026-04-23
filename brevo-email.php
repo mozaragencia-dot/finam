@@ -13,6 +13,62 @@ function respond(int $httpCode, bool $ok, string $message, array $extra = []): v
     exit;
 }
 
+function get_env_value(string $name, string $default = ''): string
+{
+    $candidates = [
+        getenv($name),
+        $_ENV[$name] ?? null,
+        $_SERVER[$name] ?? null,
+        $_SERVER['REDIRECT_' . $name] ?? null,
+    ];
+
+    foreach ($candidates as $value) {
+        if ($value === null) {
+            continue;
+        }
+        $clean = trim((string)$value);
+        if ($clean !== '') {
+            return $clean;
+        }
+    }
+
+    return $default;
+}
+
+function load_dotenv_if_present(array $paths): void
+{
+    foreach ($paths as $path) {
+        if (!is_string($path) || $path === '' || !is_file($path) || !is_readable($path)) {
+            continue;
+        }
+        $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if ($lines === false) {
+            continue;
+        }
+        foreach ($lines as $line) {
+            $trimmed = trim((string)$line);
+            if ($trimmed === '' || str_starts_with($trimmed, '#')) {
+                continue;
+            }
+            $parts = explode('=', $trimmed, 2);
+            if (count($parts) !== 2) {
+                continue;
+            }
+            $key = trim($parts[0]);
+            $value = trim($parts[1]);
+            if ($key === '') {
+                continue;
+            }
+            $value = trim($value, " \t\n\r\0\x0B\"'");
+            if (get_env_value($key) === '') {
+                putenv($key . '=' . $value);
+                $_ENV[$key] = $value;
+                $_SERVER[$key] = $_SERVER[$key] ?? $value;
+            }
+        }
+    }
+}
+
 function escape_html(string $value): string
 {
     return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
@@ -331,11 +387,16 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     respond(405, false, 'Method not allowed');
 }
 
-$apiKey = trim((string)(getenv('BREVO_API_KEY') ?: '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'));
-$senderEmail = trim((string)(getenv('BREVO_SENDER_EMAIL') ?: 'noresponder@tacam.cl'));
-$senderName = trim((string)(getenv('BREVO_SENDER_NAME') ?: 'Tacam'));
-$replyToEmail = trim((string)(getenv('BREVO_REPLY_TO_EMAIL') ?: ''));
-$replyToName = trim((string)(getenv('BREVO_REPLY_TO_NAME') ?: $senderName));
+load_dotenv_if_present([
+    __DIR__ . '/.env',
+    dirname(__DIR__) . '/.env',
+]);
+
+$apiKey = get_env_value('BREVO_API_KEY');
+$senderEmail = get_env_value('BREVO_SENDER_EMAIL', 'noresponder@tacam.cl');
+$senderName = get_env_value('BREVO_SENDER_NAME', 'Tacam');
+$replyToEmail = get_env_value('BREVO_REPLY_TO_EMAIL');
+$replyToName = get_env_value('BREVO_REPLY_TO_NAME', $senderName);
 
 if ($apiKey === '') {
     respond(500, false, 'BREVO_API_KEY missing on server');
