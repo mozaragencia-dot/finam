@@ -394,8 +394,8 @@ load_dotenv_if_present([
 ]);
 
 $apiKey = get_env_value('BREVO_API_KEY');
-$senderEmail = get_env_value('BREVO_SENDER_EMAIL', 'noresponder@tacam.cl');
-$senderName = get_env_value('BREVO_SENDER_NAME', 'Tacam');
+$senderEmail = get_env_value('BREVO_SENDER_EMAIL', 'tacam@agenciayousay.cl');
+$senderName = get_env_value('BREVO_SENDER_NAME', 'tacam');
 $replyToEmail = get_env_value('BREVO_REPLY_TO_EMAIL');
 $replyToName = get_env_value('BREVO_REPLY_TO_NAME', $senderName);
 

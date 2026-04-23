@@ -2898,11 +2898,6 @@ function buildBookingConfirmationSummary(booking) {
 function showStrongSaveConfirmation(booking) {
   const summary = buildBookingConfirmationSummary(booking);
   showSavePopup(summary);
-  try {
-    window.alert(summary);
-  } catch (error) {
-    // fallback silencioso para entornos sin alert
-  }
 }
 
 function escapePreviewHtml(value) {
