@@ -598,6 +598,7 @@ const GENDARMERIA_RECIPIENTS = [
   { email: 'claudia.lizama@gendarmeria.cl', label: 'Cárcel Mujeres' },
 ];
 const GENDARMERIA_CC_RECIPIENTS = [
+  'administracion@tacam.cl',
   'stapia@tacam.cl',
   'vreichert@tacam.cl',
   'ccliment@tacam.cl',
@@ -2956,6 +2957,12 @@ function getGendarmeriaRecipients() {
   };
 }
 
+function getAllLawyerEmails() {
+  return [...new Set(getLawyers()
+    .map(item => String(item?.email || '').trim().toLowerCase())
+    .filter(Boolean))];
+}
+
 function buildGendarmeriaPreviewHtml(visits, subject, recipients) {
   const safeVisits = Array.isArray(visits) ? visits : [];
   const safeRecipients = Array.isArray(recipients) ? recipients : [];
@@ -3058,8 +3065,9 @@ async function sendGendarmeriaRoster(visits, subject, options = {}) {
       return String(lawyer?.email || '').trim();
     })
     .filter(Boolean))];
+  const allLawyerEmails = getAllLawyerEmails();
   const baseRecipients = Array.isArray(overrideRecipients) && overrideRecipients.length ? overrideRecipients : recipients;
-  const copyRecipients = includeDefaultCopies ? [...GENDARMERIA_CC_RECIPIENTS, ...lawyerEmails] : [];
+  const copyRecipients = includeDefaultCopies ? [...GENDARMERIA_CC_RECIPIENTS, ...allLawyerEmails, ...lawyerEmails] : [];
   const allRecipients = [...new Set([...baseRecipients, ...copyRecipients])];
   try {
     for (const toEmail of allRecipients) {
