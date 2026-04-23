@@ -121,7 +121,7 @@ function build_gendarmeria_roster_html(string $subject, array $templateData): st
         $rowsHtml .= '<tr>'
             . '<td style="padding:16px 14px;border-top:1px solid #e2e8f0;background:' . $rowClass . ';font-weight:600;color:#0f172a;">' . ($nombre ?: '-') . '</td>'
             . '<td style="padding:16px 14px;border-top:1px solid #e2e8f0;background:' . $rowClass . ';color:#475569;">' . ($rut ?: '-') . '</td>'
-            . '<td style="padding:16px 14px;border-top:1px solid #e2e8f0;background:' . $rowClass . ';color:#475569;">' . ($modulo ?: 'Vacío') . '</td>'
+            . '<td style="padding:16px 14px;border-top:1px solid #e2e8f0;background:' . $rowClass . ';color:#475569;">' . ($modulo ?: '') . '</td>'
             . '<td style="padding:16px 14px;border-top:1px solid #e2e8f0;background:' . $rowClass . ';color:transparent;">&nbsp;</td>'
             . '<td style="padding:16px 14px;border-top:1px solid #e2e8f0;background:' . $rowClass . ';color:transparent;">&nbsp;</td>'
             . '</tr>';
