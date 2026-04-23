@@ -658,6 +658,20 @@ function normalizeAssignedToValue(value) {
   return clean === UNASSIGNED_LAWYER_LABEL ? '' : clean;
 }
 
+function normalizeLawyerComparisonValue(value) {
+  return String(value || '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function isSameLawyerName(left, right) {
+  const leftResolved = resolveLawyerFullName(left);
+  const rightResolved = resolveLawyerFullName(right);
+  return normalizeLawyerComparisonValue(leftResolved || left) === normalizeLawyerComparisonValue(rightResolved || right);
+}
+
 function getProfileByCredentials(username, password) {
   const cleanUser = String(username || '').trim().toLowerCase();
   return getProfiles().find(profile =>
@@ -705,11 +719,12 @@ function applyRoleAccess() {
   if (lawyerCalendarFilter) lawyerCalendarFilter.disabled = role === 'Abogada';
   if (sharedOnlyInput) sharedOnlyInput.disabled = role === 'Abogada';
   if (role === 'Abogada' && sessionLawyer) {
-    if (assignedToSelect) { assignedToSelect.value = sessionLawyer; assignedToSelect.disabled = false; }
-    if (prisonAssignedToSelect) { prisonAssignedToSelect.value = sessionLawyer; prisonAssignedToSelect.disabled = false; }
-    if (lawyerFilter) lawyerFilter.value = sessionLawyer;
-    if (lawyerCalendarFilter) lawyerCalendarFilter.value = sessionLawyer;
-    if (reportLawyerFilter) reportLawyerFilter.value = sessionLawyer;
+    const resolvedSessionLawyer = resolveLawyerFullName(sessionLawyer) || sessionLawyer;
+    if (assignedToSelect) { assignedToSelect.value = resolvedSessionLawyer; assignedToSelect.disabled = false; }
+    if (prisonAssignedToSelect) { prisonAssignedToSelect.value = resolvedSessionLawyer; prisonAssignedToSelect.disabled = false; }
+    if (lawyerFilter) lawyerFilter.value = resolvedSessionLawyer;
+    if (lawyerCalendarFilter) lawyerCalendarFilter.value = resolvedSessionLawyer;
+    if (reportLawyerFilter) reportLawyerFilter.value = resolvedSessionLawyer;
   }
 }
 
@@ -719,13 +734,13 @@ function getVisibleClientsForSession() {
   const clients = getClients();
   if (role !== 'Abogada' || !sessionLawyer) return clients;
   const clientIds = new Set(getBookings()
-    .filter(booking => (booking.assignedTo || '').trim() === sessionLawyer)
+    .filter(booking => isSameLawyerName(booking.assignedTo, sessionLawyer))
     .map(booking => booking.clientId)
     .filter(Boolean));
   return clients.filter(client =>
     clientIds.has(client.id) ||
-    String(client.assignedTo || '').trim() === sessionLawyer ||
-    String(client.createdByLawyer || '').trim() === sessionLawyer
+    isSameLawyerName(client.assignedTo, sessionLawyer) ||
+    isSameLawyerName(client.createdByLawyer, sessionLawyer)
   );
 }
 
@@ -734,7 +749,7 @@ function getVisibleBookingsForSession(bookings = getBookings()) {
   const role = getCurrentSessionRole();
   const sessionLawyer = getCurrentSessionLawyerName();
   if (role !== 'Abogada' || !sessionLawyer) return bookings;
-  return bookings.filter(booking => String(booking.assignedTo || '').trim() === sessionLawyer);
+  return bookings.filter(booking => isSameLawyerName(booking.assignedTo, sessionLawyer));
 }
 
 function ensureDefaultLawyerAccessProfiles() {
@@ -2877,7 +2892,7 @@ function buildGendarmeriaTemplateData(visits, senderLawyer = {}) {
 function buildBookingConfirmationSummary(booking) {
   if (!booking || typeof booking !== 'object') return '';
   const moduleValue = String(booking.prisonModule || booking.representative?.modulo || '').trim() || EMPTY_MODULE_LABEL;
-  return `✅ Datos agendados correctamente.\n\nCliente: ${booking.customer || '-'}\nFecha: ${booking.date || '-'}\nHora: ${booking.time || '--:--'}\nAbogada: ${booking.assignedTo || 'Sin asignar'}\nMódulo: ${moduleValue}\n\nPresiona OK para confirmar.`;
+  return `✅ Datos agendados correctamente.\n\nCliente: ${booking.customer || '-'}\nFecha: ${booking.date || '-'}\nHora: ${booking.time || '--:--'}\nAbogada: ${booking.assignedTo || 'Sin asignar'}\nMódulo: ${moduleValue}\n\nPresiona OK.`;
 }
 
 function showStrongSaveConfirmation(booking) {
@@ -3969,8 +3984,6 @@ if (sendGendarmeriaEmailBtn) sendGendarmeriaEmailBtn.addEventListener('click', a
   }
   const subject = `TACAM: Nómina visita a la cárcel ${visits[0]?.date || ''}`.trim();
   openGendarmeriaPreview(visits, subject, recipients);
-
-  if (!window.confirm(`¿Confirmar envío manual a Gendarmería para ${visits.length} visita(s) de mañana?`)) return;
 
   try {
     const sent = await sendGendarmeriaRoster(visits, subject);
